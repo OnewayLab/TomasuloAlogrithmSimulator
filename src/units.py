@@ -2,6 +2,47 @@ from typing import Union
 from cdb import CommonDataBus
 
 
+class FPRegisterFile:
+    def __init__(self, n_registers: int, cbd: CommonDataBus):
+        """
+        Floating-point Register File
+
+        Args:
+            n_registers: the number of registers
+            cbd: the common data bus
+        """
+        self.__n_registers = n_registers
+        self.__cbd = cbd
+        self.__registers = [{"fu": "", "data": 0.0}] * n_registers
+
+    def read(self, register: int) -> Union[float, str]:
+        """Read a register
+
+        Args:
+            register: the register to read
+
+        Returns:
+            the value of the register or the functional unit that will produce it
+        """
+        tag, data = self.__cbd.read()
+        if tag == self.__registers[register]["fu"]:
+            return data
+        elif self.__registers[register]["fu"] == "":
+            return self.__registers[register]["data"]
+        else:
+            return self.__registers[register]["fu"]
+
+    def tick(self):
+        """Tick the clock"""
+        # Check CDB for required data
+        tag, data = self.__cbd.read()
+        if tag != "":
+            for i in range(self.__n_registers):
+                if self.__registers[i]["fu"] == tag:
+                    self.__registers[i]["data"] = data
+                    self.__registers[i]["fu"] = ""
+
+
 class MemoryUnit:
     def __init__(self, cdb: CommonDataBus, n_buffers: int, n_cycles: int):
         """
@@ -16,21 +57,22 @@ class MemoryUnit:
         self.__n_buffers = n_buffers
         self.__n_cycles = n_cycles
         self.__memory: dict[int, int] = {}
-        self.__load_buffers = [{"busy": False, "address": 0}] * n_buffers
+        self.__load_buffers = [{"busy": False, "address": 0, "base_fu": ""}] * n_buffers
         self.__load_buffer_head = 0
         self.__load_buffer_tail = 0
-        self.__load_cycle_counter = 0
+        self.__load_cycle_counter = -1
         self.__store_buffers = [
-            {"busy": False, "address": 0, "data": 0.0, "fu": ""}
+            {"busy": False, "address": 0, "data": 0.0, "base_fu": "", "data_fu": ""}
         ] * n_buffers
         self.__store_buffer_head = 0
         self.__store_buffer_tail = 0
 
-    def issue_load(self, address: int) -> bool:
+    def issue_load(self, base: Union[int, str], offset: int) -> bool:
         """Issue a load instruction
 
         Args:
-            address: the address to load data from
+            base: the base address or the reservation station that will produce it
+            offset: the offset
 
         Returns:
             True if successfully put the address into the load buffer, False otherwise
@@ -40,37 +82,63 @@ class MemoryUnit:
             return False
 
         # Put the address into the load buffer
-        self.__load_buffers[self.__load_buffer_tail]["busy"] = True
-        self.__load_buffers[self.__load_buffer_tail]["address"] = address
+        self.__load_buffers[self.__load_buffer_tail] = {
+            "busy": True,
+            "address": base + offset if isinstance(base, int) else offset,
+            "fu": base if isinstance(base, str) else "",
+        }
         self.__load_buffer_tail = (self.__load_buffer_tail + 1) % self.__n_buffers
         return True
 
-    def issue_store(self, address: int, operand: Union[int, float, str]) -> bool:
+    def issue_store(
+        self, base: Union[int, str], offset: int, data: Union[int, float, str]
+    ) -> str:
         """Issue a store instruction
 
         Args:
-            address: the address to store data to
-            operand: the data to store or the reservation station that will produce it
+            base: the base address or the reservation station that will produce it
+            offset: the offset
+            data: the data to store or the reservation station that will produce it
 
         Returns:
-            True if successfully put the address and data into the store buffer, False otherwise
+            The reservation station tag if successful, "" otherwise
         """
         # Check if the store buffer is full
         if self.__store_buffers[self.__store_buffer_tail]["busy"]:
-            return False
+            return ""
 
         # Put the address and data into the store buffer
         self.__store_buffers[self.__store_buffer_tail] = {
             "busy": True,
-            "address": address,
-            "data": 0.0 if isinstance(operand, str) else operand,
-            "fu": operand if isinstance(operand, str) else "",
+            "address": base + offset if isinstance(base, int) else offset,
+            "data": 0.0 if isinstance(data, str) else data,
+            "base_fu": base if isinstance(base, str) else "",
+            "data_fu": data if isinstance(data, str) else "",
         }
+        tag = f"store{self.__store_buffer_tail}"
         self.__store_buffer_tail = (self.__store_buffer_tail + 1) % self.__n_buffers
         return True
 
-    def execute(self):
-        """Execute stage"""
+    def tick(self):
+        """Tick the clock"""
+        # Check CDB for required data
+        tag, data = self.__cdb.read()
+        if tag != "":
+            for i in range(self.__n_buffers):
+                if (
+                    self.__load_buffers[i]["busy"]
+                    and self.__load_buffers[i]["base_fu"] == tag
+                ):
+                    self.__load_buffers[i]["address"] += data
+                    self.__load_buffers[i]["base_fu"] = ""
+                if self.__store_buffers[i]["busy"]:
+                    if self.__store_buffers[i]["base_fu"] == tag:
+                        self.__store_buffers[i]["address"] += data
+                        self.__store_buffers[i]["base_fu"] = ""
+                    if self.__store_buffers[i]["data_fu"] == tag:
+                        self.__store_buffers[i]["data"] = data
+                        self.__store_buffers[i]["data_fu"] = ""
+
         # Check if the load buffer is not empty
         if self.__load_buffers[self.__load_buffer_head]["busy"]:
             # Check if the load cycle counter is 0
@@ -89,17 +157,6 @@ class MemoryUnit:
                 # Update the load cycle counter
                 self.__load_cycle_counter -= 1
 
-        # Check CDB for required data
-        tag, data = self.__cdb.read()
-        if tag != "":
-            for i in range(self.__n_buffers):
-                if (
-                    self.__store_buffers[i]["busy"]
-                    and self.__store_buffers[i]["fu"] == tag
-                ):
-                    self.__store_buffers[i]["data"] = data
-                    self.__store_buffers[i]["fu"] = ""
-
         # Check if the store buffer is not empty
         if (
             self.__store_buffers[self.__store_buffer_head]["busy"]
@@ -113,20 +170,11 @@ class MemoryUnit:
             self.__cdb.write(f"Store{self.__store_buffer_head}", data)
             self.__store_buffer_head = (self.__store_buffer_head + 1) % self.__n_buffers
 
-    def write_back(self):
-        """Write-back stage"""
-        # Check CDB for required data
-        tag, data = self.__cdb.read()
-        if tag != "":
-            for i in range(self.__n_buffers):
-                if (
-                    self.__load_buffers[i]["busy"]
-                    and self.__load_buffers[i]["fu"] == tag
-                ):
-                    self.__load_buffers[i]["fu"] = ""
 
 class FloatingPointUnit:
-    def __init__(self, name: str, cdb: CommonDataBus, n_rs: int, n_cycles: dict[str, int]):
+    def __init__(
+        self, name: str, cdb: CommonDataBus, n_rs: int, n_cycles: dict[str, int]
+    ):
         """
         Floating-point Functional Unit, can be FPAdder or FPMultiplier
 
@@ -145,7 +193,7 @@ class FloatingPointUnit:
         ] * n_rs
         self.__rs_head = 0
         self.__rs_tail = 0
-        self.__cycle_counter = -1   # -1 means no operation is being executed
+        self.__cycle_counter = -1  # -1 means no operation is being executed
 
     def issue(self, op: str, op1: Union[float, str], op2: Union[float, str]) -> bool:
         """Issue an operation
@@ -192,9 +240,14 @@ class FloatingPointUnit:
         if self.__rs[self.__rs_head]["busy"]:
             if self.__cycle_counter == -1:
                 # Check if the operation is ready to execute
-                if self.__rs[self.__rs_head]["Qj"] == "" and self.__rs[self.__rs_head]["Qk"] == "":
+                if (
+                    self.__rs[self.__rs_head]["Qj"] == ""
+                    and self.__rs[self.__rs_head]["Qk"] == ""
+                ):
                     # Set the cycle counter
-                    self.__cycle_counter = self.__n_cycles[self.__rs[self.__rs_head]["op"]]
+                    self.__cycle_counter = self.__n_cycles[
+                        self.__rs[self.__rs_head]["op"]
+                    ]
             else:
                 # Update the cycle counter
                 self.__cycle_counter -= 1
@@ -218,43 +271,3 @@ class FloatingPointUnit:
                     # Reset the cycle counter
                     self.__cycle_counter = -1
 
-
-class FPRegisterFile:
-    def __init__(self, n_registers: int, cbd: CommonDataBus):
-        """
-        Floating-point Register File
-
-        Args:
-            n_registers: the number of registers
-            cbd: the common data bus
-        """
-        self.__n_registers = n_registers
-        self.__cbd = cbd
-        self.__registers = [{"fu": "", "data": 0.0}] * n_registers
-
-    def read(self, register: int) -> Union[float, str]:
-        """Read a register
-
-        Args:
-            register: the register to read
-
-        Returns:
-            the value of the register or the functional unit that will produce it
-        """
-        tag, data = self.__cbd.read()
-        if tag == self.__registers[register]["fu"]:
-            return data
-        elif self.__registers[register]["fu"] == "":
-            return self.__registers[register]["data"]
-        else:
-            return self.__registers[register]["fu"]
-
-    def tick(self):
-        """Tick the clock"""
-        # Check CDB for required data
-        tag, data = self.__cbd.read()
-        if tag != "":
-            for i in range(self.__n_registers):
-                if self.__registers[i]["fu"] == tag:
-                    self.__registers[i]["data"] = data
-                    self.__registers[i]["fu"] = ""
