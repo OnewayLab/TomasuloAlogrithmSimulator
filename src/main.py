@@ -13,6 +13,8 @@ class CPU:
             instructions: the list of instructions
         """
         self._instructions = instructions
+        self._issue_cycle = [0] * len(instructions)
+        self._finish_cycle = [0] * len(instructions)
         self._cdb = CommonDataBus()
         self._memory = MemoryUnit(self._cdb, 3, 2)
         self._register_file = FPRegisterFile(32, self._cdb)
@@ -22,11 +24,12 @@ class CPU:
         )
         self._pc = 0
 
-    def issue(self, instruction: str) -> bool:
+    def issue(self, instruction: str, pc: int) -> bool:
         """Issue an instruction
 
         Args:
             instruction: the instruction to issue
+            pc: the current program counter
         Returns:
             True if the instruction is issued successfully, False otherwise
         Raises:
@@ -36,20 +39,20 @@ class CPU:
         if op == "ADDD" or op == "SUBD":
             op1, op1_fu = self._register_file.read(int(src1[1:]))
             op2, op2_fu = self._register_file.read(int(src2[1:]))
-            tag = self._adder.issue(op, op1, op1_fu, op2, op2_fu)
+            tag = self._adder.issue(pc, op, op1, op1_fu, op2, op2_fu)
             self._register_file.set_fu(int(dst[1:]), tag)
         elif op == "MULTD" or op == "DIVD":
             op1, op1_fu = self._register_file.read(int(src1[1:]))
             op2, op2_fu = self._register_file.read(int(src2[1:]))
-            tag = self._multiplier.issue(op, op1, op1_fu, op2, op2_fu)
+            tag = self._multiplier.issue(pc, op, op1, op1_fu, op2, op2_fu)
             self._register_file.set_fu(int(dst[1:]), tag)
         elif op == "LD":
-            tag = self._memory.issue_load(src2, src1.replace("+", ""))
+            tag = self._memory.issue_load(pc, src2, src1.replace("+", ""))
             self._register_file.set_fu(int(dst[1:]), tag)
         elif op == "SD":
             data, data_fu = self._register_file.read(int(dst[1:]))
             tag = self._memory.issue_store(
-                src2, src1.replace("+", ""), data, data_fu
+                pc, src2, src1.replace("+", ""), data, data_fu
             )
         else:
             raise ValueError(f"Invalid operation: {op}")
@@ -68,13 +71,17 @@ class CPU:
         ):
             # Issue
             if self._pc < len(self._instructions):
-                if self.issue(self._instructions[self._pc]):
+                if self.issue(self._instructions[self._pc], self._pc):
+                    self._issue_cycle[self._pc] = cycles
                     self._pc += 1
 
             # Execute
-            self._adder.tick()
-            self._multiplier.tick()
-            self._memory.tick()
+            record = []
+            record += self._adder.tick()
+            record += self._multiplier.tick()
+            record += self._memory.tick()
+            for i in record:
+                self._finish_cycle[i] = cycles
 
             # Write back
             self._register_file.tick()
@@ -82,16 +89,16 @@ class CPU:
 
             # Print
             out_str = ""
-            for i, rs in enumerate(self._memory._load_buffers, 1):
+            for i, rs in enumerate(self._memory.load_buffers, 1):
                 out_str += f"Load{i}:{'Yes' if rs['busy'] else 'No'},{rs['address']};\n"
-            for i, rs in enumerate(self._memory._store_buffers, 1):
+            for i, rs in enumerate(self._memory.store_buffers, 1):
                 out_str += f"Store{i}:{'Yes' if rs['busy'] else 'No'},{rs['address']},{rs['fu']};\n"
-            for i, rs in enumerate(self._adder._rs, 1):
+            for i, rs in enumerate(self._adder.rs, 1):
                 out_str += f"Add{i}:{'Yes' if rs['busy'] else 'No'},{rs['op']},{rs['Vj']},{rs['Vk']},{rs['Qj']},{rs['Qk']};\n"
-            for i, rs in enumerate(self._multiplier._rs, 1):
+            for i, rs in enumerate(self._multiplier.rs, 1):
                 out_str += f"Mult{i}:{'Yes' if rs['busy'] else 'No'},{rs['op']},{rs['Vj']},{rs['Vk']},{rs['Qj']},{rs['Qk']};\n"
             for i in range(0, 13, 2):
-                reg = self._register_file._registers[i]
+                reg = self._register_file.registers[i]
                 out_str += f"F{i}:{reg['fu'] if reg['fu'] else reg['data']};"
             if out_str != pre_out_str:
                 if pre_out_str:
@@ -112,6 +119,9 @@ class CPU:
         else:
             print(f"Cycle_{cycles - same_counter - 1}-{cycles - 1};")
         print(pre_out_str)
+
+        for i, instruction in enumerate(self._instructions):
+            print(f"{instruction} :{self._issue_cycle[i]},{self._finish_cycle[i]},{self._finish_cycle[i] + 1};")
 
 
 if __name__ == "__main__":
