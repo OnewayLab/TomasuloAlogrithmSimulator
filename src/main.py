@@ -14,7 +14,7 @@ class CPU:
         """
         self._instructions = instructions
         self._cdb = CommonDataBus()
-        self._memory = MemoryUnit(self._cdb, 3, 3)
+        self._memory = MemoryUnit(self._cdb, 3, 2)
         self._register_file = FPRegisterFile(32, self._cdb)
         self._adder = FloatingPointUnit("Add", self._cdb, 3, {"ADDD": 2, "SUBD": 2})
         self._multiplier = FloatingPointUnit(
@@ -58,14 +58,14 @@ class CPU:
     def run(self):
         """Run the CPU"""
         cycles = 1
+        pre_out_str = ""
+        same_counter = 0
         while (
             self._pc < len(self._instructions)
             or not self._adder.finished()
             or not self._multiplier.finished()
             or not self._memory.finished()
         ):
-            print(f"Cycle_{cycles};")
-
             # Issue
             if self._pc < len(self._instructions):
                 if self.issue(self._instructions[self._pc]):
@@ -81,20 +81,37 @@ class CPU:
             self._cdb.tick()
 
             # Print
+            out_str = ""
             for i, rs in enumerate(self._memory._load_buffers, 1):
-                print(f"Load{i}:{'Yes' if rs['busy'] else 'No'},{rs['address']};")
+                out_str += f"Load{i}:{'Yes' if rs['busy'] else 'No'},{rs['address']};\n"
             for i, rs in enumerate(self._memory._store_buffers, 1):
-                print(f"Store{i}:{'Yes' if rs['busy'] else 'No'},{rs['address']},{rs['fu'] if rs['fu'] else rs['data']};")
+                out_str += f"Store{i}:{'Yes' if rs['busy'] else 'No'},{rs['address']},{rs['fu']};\n"
             for i, rs in enumerate(self._adder._rs, 1):
-                print(f"Add{i}:{'Yes' if rs['busy'] else 'No'},{rs['op']},{rs['Vj']},{rs['Vk']},{rs['Qj']},{rs['Qk']};")
+                out_str += f"Add{i}:{'Yes' if rs['busy'] else 'No'},{rs['op']},{rs['Vj']},{rs['Vk']},{rs['Qj']},{rs['Qk']};\n"
             for i, rs in enumerate(self._multiplier._rs, 1):
-                print(f"Mult{i}:{'Yes' if rs['busy'] else 'No'},{rs['op']},{rs['Vj']},{rs['Vk']},{rs['Qj']},{rs['Qk']};")
-            for i, rs in enumerate(self._register_file._registers):
-                print(f"F{i}:{rs['fu']};", end="")
-            print()
+                out_str += f"Mult{i}:{'Yes' if rs['busy'] else 'No'},{rs['op']},{rs['Vj']},{rs['Vk']},{rs['Qj']},{rs['Qk']};\n"
+            for i in range(0, 13, 2):
+                reg = self._register_file._registers[i]
+                out_str += f"F{i}:{reg['fu'] if reg['fu'] else reg['data']};"
+            if out_str != pre_out_str:
+                if pre_out_str:
+                    if same_counter == 0:
+                        print(f"Cycle_{cycles - 1};")
+                    else:
+                        print(f"Cycle_{cycles - same_counter - 1}-{cycles - 1};")
+                    print(pre_out_str)
+                pre_out_str = out_str
+                same_counter = 0
+            else:
+                same_counter += 1
 
             cycles += 1
 
+        if same_counter == 0:
+            print(f"Cycle_{cycles - 1};")
+        else:
+            print(f"Cycle_{cycles - same_counter - 1}-{cycles - 1};")
+        print(pre_out_str)
 
 
 if __name__ == "__main__":
