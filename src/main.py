@@ -18,7 +18,7 @@ class CPU:
         self._register_file = FPRegisterFile(32, self._cdb)
         self._adder = FloatingPointUnit("Add", self._cdb, 3, {"ADDD": 2, "SUBD": 2})
         self._multiplier = FloatingPointUnit(
-            "Mul", self._cdb, 2, {"MULTD": 10, "DIVD": 20}
+            "Mult", self._cdb, 2, {"MULTD": 10, "DIVD": 20}
         )
         self._pc = 0
 
@@ -44,12 +44,12 @@ class CPU:
             tag = self._multiplier.issue(op, op1, op1_fu, op2, op2_fu)
             self._register_file.set_fu(int(dst[1:]), tag)
         elif op == "LD":
-            tag = self._memory.issue_load(src2, "", src1.replace("+", ""))
+            tag = self._memory.issue_load(src2, src1.replace("+", ""))
             self._register_file.set_fu(int(dst[1:]), tag)
         elif op == "SD":
             data, data_fu = self._register_file.read(int(dst[1:]))
             tag = self._memory.issue_store(
-                src2, "", src1.replace("+", ""), data, data_fu
+                src2, src1.replace("+", ""), data, data_fu
             )
         else:
             raise ValueError(f"Invalid operation: {op}")
@@ -84,7 +84,7 @@ class CPU:
             for i, rs in enumerate(self._memory._load_buffers, 1):
                 print(f"Load{i}:{'Yes' if rs['busy'] else 'No'},{rs['address']};")
             for i, rs in enumerate(self._memory._store_buffers, 1):
-                print(f"Store{i}:{'Yes' if rs['busy'] else 'No'},{rs['address']},{rs['data_fu']};")
+                print(f"Store{i}:{'Yes' if rs['busy'] else 'No'},{rs['address']},{rs['fu'] if rs['fu'] else rs['data']};")
             for i, rs in enumerate(self._adder._rs, 1):
                 print(f"Add{i}:{'Yes' if rs['busy'] else 'No'},{rs['op']},{rs['Vj']},{rs['Vk']},{rs['Qj']},{rs['Qk']};")
             for i, rs in enumerate(self._multiplier._rs, 1):
@@ -102,7 +102,7 @@ if __name__ == "__main__":
 
     with open("../input/input1.txt", "r") as f_in, open("../output/output1.txt", "w") as f_out:
         input1 = f_in.read().splitlines()
-        # sys.stdout = f_out
+        sys.stdout = f_out
         CPU(input1).run()
 
     with open("../input/input2.txt", "r") as f_in, open("../output/output2.txt", "w") as f_out:

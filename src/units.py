@@ -67,22 +67,21 @@ class MemoryUnit:
         self._n_buffers = n_buffers
         self._n_cycles = n_cycles
         self._memory: dict[int, str] = {}
-        self._load_buffers = [{"busy": False, "address": "", "base_fu": ""}] * n_buffers
+        self._load_buffers = [{"busy": False, "address": ""}] * n_buffers
         self._load_buffer_head = 0
         self._load_buffer_tail = 0
         self._load_cycle_counter = -1
         self._store_buffers = [
-            {"busy": False, "address": "", "data": "", "base_fu": "", "data_fu": ""}
+            {"busy": False, "address": "", "data": "", "fu": ""}
         ] * n_buffers
         self._store_buffer_head = 0
         self._store_buffer_tail = 0
 
-    def issue_load(self, base: str, base_fu: str, offset: str) -> str:
+    def issue_load(self, base: str, offset: str) -> str:
         """Issue a load instruction
 
         Args:
-            base: the base address if it's ready, "" otherwise
-            base_fu: the functional unit that will produce the base address
+            base: the base address
             offset: the offset
 
         Returns:
@@ -95,24 +94,22 @@ class MemoryUnit:
         # Put the address into the load buffer
         self._load_buffers[self._load_buffer_tail] = {
             "busy": True,
-            "address": f"{offset}+{base}" if base else offset,
-            "base_fu": base_fu,
+            "address": f"{offset}+{base}",
         }
         tag = f"Load{self._load_buffer_tail+1}"
         self._load_buffer_tail = (self._load_buffer_tail + 1) % self._n_buffers
         return tag
 
     def issue_store(
-        self, base: str, base_fu:str, offset: str, data: str, data_fu: str
+        self, base: str, offset: str, data: str, fu: str
     ) -> str:
         """Issue a store instruction
 
         Args:
-            base: the base address if it's ready, "" otherwise
-            base_fu: the tag of the functional unit that will produce the base address
+            base: the base address
             offset: the offset
             data: the data to store if it's ready, "" otherwise
-            data_fu: the tag of the functional unit that will produce the data
+            fu: the tag of the functional unit that will produce the data
 
         Returns:
             The reservation station tag if successful, "" otherwise
@@ -126,8 +123,7 @@ class MemoryUnit:
             "busy": True,
             "address": f"{offset}+{base}" if base else offset,
             "data": data,
-            "base_fu": base_fu,
-            "data_fu": data_fu,
+            "fu": fu,
         }
         tag = f"Store{self._store_buffer_tail+1}"
         self._store_buffer_tail = (self._store_buffer_tail + 1) % self._n_buffers
@@ -139,42 +135,30 @@ class MemoryUnit:
         tag, data = self._cdb.read()
         if tag:
             for i in range(self._n_buffers):
-                if (
-                    self._load_buffers[i]["busy"]
-                    and self._load_buffers[i]["base_fu"] == tag
-                ):
-                    self._load_buffers[i]["address"] = f"{data} + {self._load_buffers[i]['address']}"
-                    self._load_buffers[i]["base_fu"] = ""
-                if self._store_buffers[i]["busy"]:
-                    if self._store_buffers[i]["base_fu"] == tag:
-                        self._store_buffers[i]["address"] = f"{data} + {self._store_buffers[i]['address']}"
-                        self._store_buffers[i]["base_fu"] = ""
-                    if self._store_buffers[i]["data_fu"] == tag:
-                        self._store_buffers[i]["data"] = data
-                        self._store_buffers[i]["data_fu"] = ""
+                if self._store_buffers[i]["busy"] and self._store_buffers[i]["fu"] == tag:
+                    self._store_buffers[i]["data"] = data
+                    self._store_buffers[i]["fu"] = ""
 
         # Check if the load buffer is not empty
         if self._load_buffers[self._load_buffer_head]["busy"]:
             if self._load_cycle_counter == -1:
-                # Check if the load operation is ready
-                if self._load_buffers[self._load_buffer_head]["base_fu"] == "":
-                    # Set the cycle counter
-                    self._load_cycle_counter = self._n_cycles
+                # Set the cycle counter
+                self._load_cycle_counter = self._n_cycles
             else:
                 # Update the cycle counter
                 self._load_cycle_counter -= 1
                 # Check if the load operation is finished
-                if self._load_cycle_counter == 0:
+                if self._load_cycle_counter == 1:   # Execution finished
                     # Load data from memory
                     address = self._load_buffers[self._load_buffer_head]["address"]
                     data = self._memory.get(address, f"M({address})")
                     # Write data to CDB
                     self._cdb.write(f"Load{self._load_buffer_head + 1}", data)
+                elif self._load_cycle_counter == 0: # Write back finished
                     # Reset the reservation station and the cycle counter
                     self._load_buffers[self._load_buffer_head] = {
                         "busy": False,
                         "address": "",
-                        "base_fu": "",
                     }
                     self._load_buffer_head = (
                         self._load_buffer_head + 1
@@ -184,23 +168,19 @@ class MemoryUnit:
         # Check if the store buffer is not empty and the base address and data are ready
         if (
             self._store_buffers[self._store_buffer_head]["busy"]
-            and self._store_buffers[self._store_buffer_head]["base_fu"] == ""
-            and self._store_buffers[self._store_buffer_head]["data_fu"] == ""
+            and self._store_buffers[self._store_buffer_head]["fu"] == ""
         ):
             # Store data to memory
             address = self._store_buffers[self._store_buffer_head]["address"]
             data = self._store_buffers[self._store_buffer_head]["data"]
             self._memory[address] = data
-            # Write data to CDB
-            self._cdb.write(f"Store{self._store_buffer_head + 1}", data)
             self._store_buffer_head = (self._store_buffer_head + 1) % self._n_buffers
             # Reset the reservation station
             self._store_buffers[self._store_buffer_head] = {
                 "busy": False,
                 "address": "",
                 "data": "",
-                "base_fu": "",
-                "data_fu": "",
+                "fu": "",
             }
 
     def finished(self):
@@ -295,7 +275,7 @@ class FloatingPointUnit:
                 # Update the cycle counter
                 self._cycle_counter -= 1
                 # Check if the operation is finished
-                if self._cycle_counter == 0:
+                if self._cycle_counter == 1:    # Execution finished
                     # Execute the operation
                     op = self._rs[self._rs_head]["op"]
                     op1 = self._rs[self._rs_head]["Vj"]
@@ -310,7 +290,7 @@ class FloatingPointUnit:
                         result = f"{op1}/{op2}"
                     # Write data to CDB
                     self._cdb.write(f"{self._name}{self._rs_head + 1}", result)
-                    self._rs_head = (self._rs_head + 1) % self._n_rs
+                elif self._cycle_counter == 0:  # Write back finished
                     # Reset the reservation station and the cycle counter
                     self._rs[self._rs_head] = {
                         "busy": False,
@@ -320,7 +300,7 @@ class FloatingPointUnit:
                         "Qj": "",
                         "Qk": "",
                     }
-                    self._cycle_counter = -1
+                    self._rs_head = (self._rs_head + 1) % self._n_rs
 
     def finished(self):
         """Check if all the reservation stations are empty"""
