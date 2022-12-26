@@ -23,15 +23,15 @@ class FPRegisterFile:
 
         Returns:
             if the register is ready, return the data in the register and "",
-            otherwise, return "0.0" and the tag of the functional unit that is writing to the register
+            otherwise, return "" and the tag of the functional unit that is writing to the register
         """
         tag, data = self._cbd.read()
-        if tag == self._registers[register]["fu"]:
+        if tag and tag == self._registers[register]["fu"]:
             return data, ""
         elif self._registers[register]["fu"] == "":
             return self._registers[register]["data"], ""
         else:
-            return "0.0", self._registers[register]["fu"]
+            return "", self._registers[register]["fu"]
 
     def set_fu(self, register: int, fu: str):
         """Set the functional unit that is writing to the register
@@ -67,12 +67,12 @@ class MemoryUnit:
         self._n_buffers = n_buffers
         self._n_cycles = n_cycles
         self._memory: dict[int, str] = {}
-        self._load_buffers = [{"busy": False, "address": 0, "base_fu": ""}] * n_buffers
+        self._load_buffers = [{"busy": False, "address": "", "base_fu": ""}] * n_buffers
         self._load_buffer_head = 0
         self._load_buffer_tail = 0
         self._load_cycle_counter = -1
         self._store_buffers = [
-            {"busy": False, "address": 0, "data": 0.0, "base_fu": "", "data_fu": ""}
+            {"busy": False, "address": "", "data": "", "base_fu": "", "data_fu": ""}
         ] * n_buffers
         self._store_buffer_head = 0
         self._store_buffer_tail = 0
@@ -95,10 +95,10 @@ class MemoryUnit:
         # Put the address into the load buffer
         self._load_buffers[self._load_buffer_tail] = {
             "busy": True,
-            "address": f"{base} + {offset}" if base else offset,
+            "address": f"{offset}+{base}" if base else offset,
             "base_fu": base_fu,
         }
-        tag = f"Load{self._load_buffer_tail}"
+        tag = f"Load{self._load_buffer_tail+1}"
         self._load_buffer_tail = (self._load_buffer_tail + 1) % self._n_buffers
         return tag
 
@@ -124,12 +124,12 @@ class MemoryUnit:
         # Put the address and data into the store buffer
         self._store_buffers[self._store_buffer_tail] = {
             "busy": True,
-            "address": f"{base} + {offset}" if base else offset,
+            "address": f"{offset}+{base}" if base else offset,
             "data": data,
             "base_fu": base_fu,
             "data_fu": data_fu,
         }
-        tag = f"Store{self._store_buffer_tail}"
+        tag = f"Store{self._store_buffer_tail+1}"
         self._store_buffer_tail = (self._store_buffer_tail + 1) % self._n_buffers
         return tag
 
@@ -153,26 +153,33 @@ class MemoryUnit:
                         self._store_buffers[i]["data"] = data
                         self._store_buffers[i]["data_fu"] = ""
 
-        # Check if the load buffer is not empty and the base address is ready
-        if (
-            self._load_buffers[self._load_buffer_head]["busy"]
-            and self._load_buffers[self._load_buffer_head]["base_fu"] == ""
-        ):
-            # Check if the load cycle counter is 0
-            if self._load_cycle_counter == 0:
-                # Load data from memory
-                address = self._load_buffers[self._load_buffer_head]["address"]
-                data = self._memory.get(address, f"M({address})")
-                # Write data to CDB
-                self._cdb.write(f"Load{self._load_buffer_head}", data)
-                self._load_buffer_head = (
-                    self._load_buffer_head + 1
-                ) % self._n_buffers
-                # Set the load cycle counter
-                self._load_cycle_counter = self._n_cycles
+        # Check if the load buffer is not empty
+        if self._load_buffers[self._load_buffer_head]["busy"]:
+            if self._load_cycle_counter == -1:
+                # Check if the load operation is ready
+                if self._load_buffers[self._load_buffer_head]["base_fu"] == "":
+                    # Set the cycle counter
+                    self._load_cycle_counter = self._n_cycles
             else:
-                # Update the load cycle counter
+                # Update the cycle counter
                 self._load_cycle_counter -= 1
+                # Check if the load operation is finished
+                if self._load_cycle_counter == 0:
+                    # Load data from memory
+                    address = self._load_buffers[self._load_buffer_head]["address"]
+                    data = self._memory.get(address, f"M({address})")
+                    # Write data to CDB
+                    self._cdb.write(f"Load{self._load_buffer_head + 1}", data)
+                    # Reset the reservation station and the cycle counter
+                    self._load_buffers[self._load_buffer_head] = {
+                        "busy": False,
+                        "address": "",
+                        "base_fu": "",
+                    }
+                    self._load_buffer_head = (
+                        self._load_buffer_head + 1
+                    ) % self._n_buffers
+
 
         # Check if the store buffer is not empty and the base address and data are ready
         if (
@@ -185,8 +192,16 @@ class MemoryUnit:
             data = self._store_buffers[self._store_buffer_head]["data"]
             self._memory[address] = data
             # Write data to CDB
-            self._cdb.write(f"Store{self._store_buffer_head}", data)
+            self._cdb.write(f"Store{self._store_buffer_head + 1}", data)
             self._store_buffer_head = (self._store_buffer_head + 1) % self._n_buffers
+            # Reset the reservation station
+            self._store_buffers[self._store_buffer_head] = {
+                "busy": False,
+                "address": "",
+                "data": "",
+                "base_fu": "",
+                "data_fu": "",
+            }
 
     def finished(self):
         """Check if all the buffers are empty"""
@@ -214,7 +229,7 @@ class FloatingPointUnit:
         self._n_rs = n_rs
         self._n_cycles = n_cycles
         self._rs = [
-            {"busy": False, "op": "", "Vj": 0.0, "Vk": 0.0, "Qj": "", "Qk": ""}
+            {"busy": False, "op": "", "Vj": "", "Vk": "", "Qj": "", "Qk": ""}
         ] * n_rs
         self._rs_head = 0
         self._rs_tail = 0
@@ -225,9 +240,9 @@ class FloatingPointUnit:
 
         Args:
             op: the operation, can be "ADDD", "SUBD", "MULD" or "DIVD"
-            op1: the first operand if it's ready, otherwise "0.0"
+            op1: the first operand if it's ready, otherwise ""
             op1_fu: the functional unit that will produce the first operand
-            op2: the second operand if it's ready, otherwise "0.0"
+            op2: the second operand if it's ready, otherwise ""
             op2_fu: the functional unit that will produce the second operand
 
         Returns:
@@ -246,7 +261,7 @@ class FloatingPointUnit:
             "Vk": op2,
             "Qk": op2_fu,
         }
-        tag = f"{self._name}{self._rs_tail}"
+        tag = f"{self._name}{self._rs_tail+1}"
         self._rs_tail = (self._rs_tail + 1) % self._n_rs
         return tag
 
@@ -254,7 +269,7 @@ class FloatingPointUnit:
         """Tick the clock"""
         # Check CDB for required data
         tag, data = self._cdb.read()
-        if tag != "":
+        if tag:
             for i in range(self._n_rs):
                 if self._rs[i]["busy"]:
                     if self._rs[i]["Qj"] == tag:
@@ -294,9 +309,17 @@ class FloatingPointUnit:
                     elif op == "DIVD":
                         result = f"{op1}/{op2}"
                     # Write data to CDB
-                    self._cdb.write(f"{self._name}{self._rs_head}", result)
+                    self._cdb.write(f"{self._name}{self._rs_head + 1}", result)
                     self._rs_head = (self._rs_head + 1) % self._n_rs
-                    # Reset the cycle counter
+                    # Reset the reservation station and the cycle counter
+                    self._rs[self._rs_head] = {
+                        "busy": False,
+                        "op": "",
+                        "Vj": "",
+                        "Vk": "",
+                        "Qj": "",
+                        "Qk": "",
+                    }
                     self._cycle_counter = -1
 
     def finished(self):
