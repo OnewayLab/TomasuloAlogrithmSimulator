@@ -2,7 +2,7 @@ import os
 import sys
 from units import *
 from cdb import *
-
+import numpy
 
 class CPU:
     def __init__(self, instructions: list[str]):
@@ -12,15 +12,15 @@ class CPU:
         Args:
             instructions: the list of instructions
         """
-        self.__instructions = instructions
-        self.__cdb = CommonDataBus()
-        self.__memory = MemoryUnit(self.__cdb, 3, 3)
-        self.__register_file = FPRegisterFile(32, self.__cdb)
-        self.__adder = FloatingPointUnit("Add", self.__cdb, 3, {"ADDD": 2, "SUBD": 2})
-        self.__multiplier = FloatingPointUnit(
-            "Mul", self.__cdb, 2, {"MULD": 10, "DIVD": 20}
+        self._instructions = instructions
+        self._cdb = CommonDataBus()
+        self._memory = MemoryUnit(self._cdb, 3, 3)
+        self._register_file = FPRegisterFile(32, self._cdb)
+        self._adder = FloatingPointUnit("Add", self._cdb, 3, {"ADDD": 2, "SUBD": 2})
+        self._multiplier = FloatingPointUnit(
+            "Mul", self._cdb, 2, {"MULD": 10, "DIVD": 20}
         )
-        self.__pc = 0
+        self._pc = 0
 
     def issue(self, instruction: str) -> bool:
         """Issue an instruction
@@ -29,52 +29,62 @@ class CPU:
             instruction: the instruction to issue
         Returns:
             True if the instruction is issued successfully, False otherwise
+        Raises:
+            ValueError: if the operation is invalid
         """
         op, dst, src1, src2 = instruction.split(" ")
         if op == "ADDD" or op == "SUBD":
-            op1, op1_fu = self.__register_file.read(int(src1[1:]))
-            op2, op2_fu = self.__register_file.read(int(src2[1:]))
-            tag = self.__adder.issue(op, op1, op1_fu, op2, op2_fu)
-            self.__register_file.set_fu(int(dst[1:]), tag)
-        elif op == "MULD" or op == "DIVD":
-            op1, op1_fu = self.__register_file.read(int(src1[1:]))
-            op2, op2_fu = self.__register_file.read(int(src2[1:]))
-            tag = self.__multiplier.issue(op, op1, op1_fu, op2, op2_fu)
-            self.__register_file.set_fu(int(dst[1:]), tag)
+            op1, op1_fu = self._register_file.read(int(src1[1:]))
+            op2, op2_fu = self._register_file.read(int(src2[1:]))
+            tag = self._adder.issue(op, op1, op1_fu, op2, op2_fu)
+            self._register_file.set_fu(int(dst[1:]), tag)
+        elif op == "MULTD" or op == "DIVD":
+            op1, op1_fu = self._register_file.read(int(src1[1:]))
+            op2, op2_fu = self._register_file.read(int(src2[1:]))
+            tag = self._multiplier.issue(op, op1, op1_fu, op2, op2_fu)
+            self._register_file.set_fu(int(dst[1:]), tag)
         elif op == "LD":
-            tag = self.__memory.issue_load(src2, "", src1.replace("+", ""))
-            self.__register_file.set_fu(int(dst[1:]), tag)
+            tag = self._memory.issue_load(src2, "", src1.replace("+", ""))
+            self._register_file.set_fu(int(dst[1:]), tag)
         elif op == "SD":
-            data, data_fu = self.__register_file.read(int(dst[1:]))
-            tag = self.__memory.issue_store(
+            data, data_fu = self._register_file.read(int(dst[1:]))
+            tag = self._memory.issue_store(
                 src2, "", src1.replace("+", ""), data, data_fu
             )
+        else:
+            raise ValueError(f"Invalid operation: {op}")
         return True if tag else False
 
     def run(self):
         """Run the CPU"""
+        cycles = 1
         while (
-            self.__pc < len(self.__instructions)
-            or not self.__adder.finished()
-            or not self.__multiplier.finished()
-            or not self.__memory.finished()
+            self._pc < len(self._instructions)
+            or not self._adder.finished()
+            or not self._multiplier.finished()
+            or not self._memory.finished()
         ):
+            print(f"Cycle_{cycles};")
+
             # Issue
-            if self.__pc < len(self.__instructions):
-                if self.issue(self.__instructions[self.__pc]):
-                    self.__pc += 1
+            if self._pc < len(self._instructions):
+                if self.issue(self._instructions[self._pc]):
+                    self._pc += 1
 
             # Execute
-            self.__adder.tick()
-            self.__multiplier.tick()
-            self.__memory.tick()
+            self._adder.tick()
+            self._multiplier.tick()
+            self._memory.tick()
 
             # Write back
-            self.__register_file.tick()
-            self.__cdb.tick()
+            self._register_file.tick()
+            self._cdb.tick()
 
-        # Print the result
-        print(self.__register_file)
+            # Print
+
+
+            cycles += 1
+
 
 
 if __name__ == "__main__":
