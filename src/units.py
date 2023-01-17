@@ -205,7 +205,7 @@ class FloatingPointUnit:
         self._n_rs = n_rs
         self._n_cycles = n_cycles
         self.rs = [
-            {"busy": False, "op": "", "Vj": "", "Vk": "", "Qj": "", "Qk": "", "counter": -1}
+            {"busy": False, "op": "", "Vj": "", "Vk": "", "Qj": "", "Qk": "", "counter": -1, "pc": 0}
         ] * n_rs
         self._rs_tail = 0
 
@@ -256,7 +256,7 @@ class FloatingPointUnit:
         # Check each reservation station
         for i, rs in enumerate(self.rs):
             if rs["busy"]:
-                if rs["counter"] == -1: # Data is not ready
+                if rs["counter"] == -1:    # Data is not ready
                     if tag and tag == rs["Qj"]:
                         rs["Vj"] = data
                         rs["Qj"] = ""
@@ -282,7 +282,7 @@ class FloatingPointUnit:
                 elif rs["counter"] == 0:    # Write back finished
                     rs["busy"] = False
                     rs["op"], rs["Vj"], rs["Vk"], rs["Qj"], rs["Qk"] = "", "", "", "", ""
-                else:   # Executing
+                else:    # Executing
                     rs["counter"] -= 1
 
         return record

@@ -2,7 +2,7 @@ import os
 import sys
 from units import *
 from cdb import *
-import numpy
+
 
 class CPU:
     def __init__(self, instructions: list[str]):
@@ -13,8 +13,8 @@ class CPU:
             instructions: the list of instructions
         """
         self._instructions = instructions
-        self._issue_cycle = [0] * len(instructions)
-        self._finish_cycle = [0] * len(instructions)
+        self._issue_cycle = [0] * len(instructions) # A record of when each instruction is issued
+        self._finish_cycle = [0] * len(instructions) # A record of when each instruction is finished
         self._cdb = CommonDataBus()
         self._memory = MemoryUnit(self._cdb, 3, 2)
         self._register_file = FPRegisterFile(32, self._cdb)
@@ -40,22 +40,19 @@ class CPU:
             op1, op1_fu = self._register_file.read(int(src1[1:]))
             op2, op2_fu = self._register_file.read(int(src2[1:]))
             tag = self._adder.issue(pc, op, op1, op1_fu, op2, op2_fu)
-            self._register_file.set_fu(int(dst[1:]), tag)
         elif op == "MULTD" or op == "DIVD":
             op1, op1_fu = self._register_file.read(int(src1[1:]))
             op2, op2_fu = self._register_file.read(int(src2[1:]))
             tag = self._multiplier.issue(pc, op, op1, op1_fu, op2, op2_fu)
-            self._register_file.set_fu(int(dst[1:]), tag)
         elif op == "LD":
             tag = self._memory.issue_load(pc, src2, src1.replace("+", ""))
-            self._register_file.set_fu(int(dst[1:]), tag)
         elif op == "SD":
             data, data_fu = self._register_file.read(int(dst[1:]))
-            tag = self._memory.issue_store(
-                pc, src2, src1.replace("+", ""), data, data_fu
-            )
+            tag = self._memory.issue_store( pc, src2, src1.replace("+", ""), data, data_fu)
         else:
             raise ValueError(f"Invalid operation: {op}")
+        if tag and op != "SD":
+            self._register_file.set_fu(int(dst[1:]), tag)
         return True if tag else False
 
     def run(self):
